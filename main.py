@@ -1,15 +1,62 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query,Request
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 from typing import List, Optional
 from pydantic import BaseModel
+from redis import Redis
+from datetime import datetime, timedelta
+from fastapi.responses import JSONResponse
+
 
 app = FastAPI()
 
-# Connect to MongoDB Atlas
+# Connecting with MongoDB
+
+
 client = MongoClient("mongodb+srv://a1akashchauhanpersonal:heicuMmmOWSwt2hO@cluster0.jd1q1xj.mongodb.net/")
 db = client["library_management"]
 students_collection = db["students"]
+
+#connecting with redis
+redis_client = Redis(host='localhost', port=6379, db=0, decode_responses=True)
+
+
+
+#middleware 
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    user_id = request.headers.get('user_id')               #if userid is not provided
+    if not user_id:
+        error_message = {"error": "Header is Missing"}       
+        return JSONResponse(status_code=429, content=error_message)
+
+    
+    today = datetime.now().strftime('%Y-%m-%d')
+    key = f"{user_id}:{today}"
+
+    current_count = int(redis_client.get(key) or 0)
+
+    if current_count >= 5:                                 #condition to check no of rate limits
+        error_message = {"error": "Rate Limit Exceeded"}
+        return JSONResponse(status_code=429, content=error_message)
+
+    # condition to check if requests happened yesterday
+    if current_count == 0:
+      
+        tomorrow = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+        #TTL
+        ttl = int((tomorrow - datetime.now()).total_seconds())
+        redis_client.setex(key, ttl, 1)
+
+
+    else:
+        redis_client.incr(key)
+
+
+    response = await call_next(request)
+    return response
+
 
 # Models
 class Student(BaseModel):
